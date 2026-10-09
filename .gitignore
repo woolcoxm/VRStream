@@ -1,0 +1,36 @@
+# Build outputs
+build/
+out/
+target/
+x64/
+[Dd]ebug/
+[Rr]elease/
+*.obj
+*.lib
+*.pdb
+*.exe
+*.dll
+*.apk
+*.aab
+*.so
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.user
+CMakeUserPresets.json
+local.properties
+.gradle/
+
+# Vulkan/OpenXR layer caches
+xr_layer_*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local experiments / large binaries (keep the repo source-only)
+*.mp4
+*.bin
+research/
