@@ -127,6 +127,13 @@ class VrstreamHmd : public ITrackedDeviceServerDriver,
     ID3D11Texture2D* layerTex_[2] = {nullptr, nullptr};  // latest submitted
     IDXGIKeyedMutex* layerMutex_[2] = {nullptr, nullptr};
 
+    // Render poses/FOVs captured at SubmitLayer (SteamVR's render truth).
+    vrstream::ViewInfoLite views_[2]{};
+    bool haveViews_ = false;
+
+    static vrstream::ViewInfoLite matrixToView(const vr::HmdMatrix34_t& pose,
+                                               const vr::HmdMatrix44_t& proj);
+
     vrstream::NvencEncoder encoder_;
     SOCKET feedSock_ = INVALID_SOCKET;
     uint32_t frameCounter_ = 0;
@@ -316,8 +323,62 @@ void VrstreamHmd::DestroyAllSwapTextureSets(uint32_t unPid) {
     }
 }
 
+// OpenVR matrices are column-major: element(row, col) = m[col][row].
+vrstream::ViewInfoLite VrstreamHmd::matrixToView(const vr::HmdMatrix34_t& pose,
+                                                 const vr::HmdMatrix44_t& proj) {
+    vrstream::ViewInfoLite v{};
+    v.px = pose.m[3][0];
+    v.py = pose.m[3][1];
+    v.pz = pose.m[3][2];
+
+    // Rotation 3x3 -> quaternion (Shepperd's method, largest-diagonal branch).
+    const float r00 = pose.m[0][0], r10 = pose.m[1][0], r20 = pose.m[2][0];
+    const float r01 = pose.m[0][1], r11 = pose.m[1][1], r21 = pose.m[2][1];
+    const float r02 = pose.m[0][2], r12 = pose.m[1][2], r22 = pose.m[2][2];
+    const float tr = r00 + r11 + r22;
+    if (tr > 0) {
+        float s = std::sqrt(tr + 1.0f) * 2.0f;
+        v.qw = 0.25f * s;
+        v.qx = (r21 - r12) / s;
+        v.qy = (r02 - r20) / s;
+        v.qz = (r12 - r01) / s;
+    } else if (r00 > r11 && r00 > r22) {
+        float s = std::sqrt(1.0f + r00 - r11 - r22) * 2.0f;
+        v.qw = (r21 - r12) / s;
+        v.qx = 0.25f * s;
+        v.qy = (r01 + r10) / s;
+        v.qz = (r02 + r20) / s;
+    } else if (r11 > r22) {
+        float s = std::sqrt(1.0f + r11 - r00 - r22) * 2.0f;
+        v.qw = (r02 - r20) / s;
+        v.qx = (r01 + r10) / s;
+        v.qy = 0.25f * s;
+        v.qz = (r12 + r21) / s;
+    } else {
+        float s = std::sqrt(1.0f + r22 - r00 - r11) * 2.0f;
+        v.qw = (r12 - r01) / s;
+        v.qx = (r02 + r20) / s;
+        v.qy = (r12 + r21) / s;
+        v.qz = 0.25f * s;
+    }
+
+    // FOV from the projection (symmetric approximation from the cotangents;
+    // SteamVR's small asymmetric offsets are absorbed by client timewarp).
+    const float cotX = proj.m[0][0];
+    const float cotY = proj.m[1][1];
+    float fx = cotX > 0.0001f ? std::atan(1.0f / cotX) : 1.0f;
+    float fy = cotY > 0.0001f ? std::atan(1.0f / cotY) : 1.0f;
+    v.fovLeft = -fx;
+    v.fovRight = fx;
+    v.fovUp = fy;
+    v.fovDown = -fy;
+    return v;
+}
+
 void VrstreamHmd::SubmitLayer(const SubmitLayerPerEye_t (&perEye)[2]) {
     for (int eye = 0; eye < 2; eye++) {
+        views_[eye] = matrixToView(perEye[eye].mHmdPose, perEye[eye].mProjection);
+        haveViews_ = true;
         ID3D11Texture2D* tex = openShared(perEye[eye].hTexture);
         if (!tex) continue;
         if (layerMutex_[eye]) {
@@ -353,8 +414,24 @@ void VrstreamHmd::Present(SharedTextureHandle_t syncTexture) {
     for (int eye = 0; eye < 2; eye++)
         if (layerMutex_[eye]) layerMutex_[eye]->ReleaseSync(0);
 
-    if (ok && !annexB.empty())
+    if (ok && !annexB.empty()) {
+        // Render poses first (small datagram), then the fragmented bitstream.
+        if (haveViews_) {
+            vrstream::FeedMetaMsg fm{};
+            fm.magic = vrstream::kFeedMetaMagic;
+            fm.frameCounter = frameCounter_;
+            fm.ptsUs = pts;
+            fm.meta.views[0] = views_[0];
+            fm.meta.views[1] = views_[1];
+            sockaddr_in to{};
+            to.sin_family = AF_INET;
+            to.sin_port = htons(kFeedPort);
+            to.sin_addr.s_addr = htonl(0x7f000001);
+            sendto(feedSock_, reinterpret_cast<const char*>(&fm), sizeof(fm), 0,
+                   reinterpret_cast<sockaddr*>(&to), sizeof(to));
+        }
         sendAll(feedSock_, annexB.data(), annexB.size(), frameCounter_, pts);
+    }
     frameCounter_++;
 }
 

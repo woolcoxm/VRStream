@@ -135,6 +135,16 @@ void ClientNet::netLoop() {
             }
             continue;
         }
+        if (h->type == static_cast<uint8_t>(PacketType::VideoMeta)) {
+            if (n >= sizeof(BaseHeader) + sizeof(VideoMetaMsg)) {
+                auto m =
+                    reinterpret_cast<const VideoMetaMsg*>(buf + sizeof(BaseHeader));
+                std::lock_guard<std::mutex> lk(metaMx_);
+                frameMeta_[m->frameIndex] = *m;
+                if (frameMeta_.size() > 32) frameMeta_.erase(frameMeta_.begin());
+            }
+            continue;
+        }
         if (h->type != static_cast<uint8_t>(PacketType::Video)) continue;
         if (n < sizeof(BaseHeader) + sizeof(VideoHeader)) continue;
 
@@ -144,8 +154,19 @@ void ClientNet::netLoop() {
 
         if (auto frame = receiver_.ingest(*vh, payload, payloadLen)) {
             if (onFrame_) {
+                VideoMetaMsg meta;
+                bool haveMeta = false;
+                {
+                    std::lock_guard<std::mutex> lk(metaMx_);
+                    auto it = frameMeta_.find(frame->frameIndex);
+                    if (it != frameMeta_.end()) {
+                        meta = it->second;
+                        haveMeta = true;
+                        frameMeta_.erase(it);
+                    }
+                }
                 onFrame_(frame->bytes.data(), frame->bytes.size(), frame->pts,
-                         frame->frameIndex, frame->keyframe);
+                         frame->frameIndex, frame->keyframe, haveMeta ? &meta : nullptr);
             }
         }
     }

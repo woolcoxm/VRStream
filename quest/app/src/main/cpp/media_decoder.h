@@ -42,6 +42,21 @@ class VideoDecoder {
     // Queue one encoded frame (Annex-B). Thread-safe.
     void feed(const uint8_t* data, size_t len, uint64_t ptsUs);
 
+    // Render-pose metadata for the most recently fed frame (used by the
+    // renderer when submitting the decoded frame's projection layer).
+    void setFrameMeta(const VideoMetaMsg& m) {
+        std::lock_guard<std::mutex> lk(metaMx_);
+        pendingMeta_ = m;
+        hasPendingMeta_ = true;
+    }
+    bool takeFrameMeta(VideoMetaMsg& out) {
+        std::lock_guard<std::mutex> lk(metaMx_);
+        if (!hasPendingMeta_) return false;
+        out = pendingMeta_;
+        hasPendingMeta_ = false;
+        return true;
+    }
+
     // Takes the newest decoded frame out of the queue (ownership transfer);
     // caller returns it via release() when done sampling it.
     bool latest(DecodedFrame& out);
@@ -75,6 +90,10 @@ class VideoDecoder {
     uint32_t frameW_ = 0, frameH_ = 0;
     std::atomic<bool> ok_{false};
     std::atomic<uint32_t> framesDecoded_{0};
+
+    std::mutex metaMx_;
+    VideoMetaMsg pendingMeta_{};
+    bool hasPendingMeta_ = false;
 };
 
 }  // namespace vrstream

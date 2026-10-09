@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <thread>
 
@@ -25,8 +26,12 @@ struct ClientNetConfig {
 class ClientNet {
   public:
     // Called for every completed video frame (Annex-B bytes, pts host clock
-    // microseconds, frameIndex, keyframe flag).
-    using FrameSink = std::function<void(const uint8_t*, size_t, uint64_t, uint32_t, bool)>;
+    // microseconds, frameIndex, keyframe flag). `meta` is null when the
+    // VideoMeta packet for that frame was lost (client falls back to local
+    // poses for the layer submission).
+    using FrameSink =
+        std::function<void(const uint8_t*, size_t, uint64_t, uint32_t, bool,
+                           const VideoMetaMsg*)>;
     // Returns the freshest head pose for the tracking uplink.
     using PoseSource = std::function<PoseSample()>;
 
@@ -62,6 +67,8 @@ class ClientNet {
     std::thread thread_;
     std::atomic<uint64_t> packetsReceived_{0};
     uint32_t seqTracking_ = 0;
+    std::mutex metaMx_;
+    std::map<uint32_t, VideoMetaMsg> frameMeta_;
 };
 
 }  // namespace vrstream

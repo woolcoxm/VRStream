@@ -333,6 +333,25 @@ bool XrRenderer::renderIntoSwapchains(XrTime predictedDisplayTime, VideoDecoder&
         lastPose_.qw = views[0].pose.orientation.w;
     }
 
+    // Timewarp contract: when the host supplied the poses SteamVR rendered
+    // with, submit those instead of freshly located LOCAL poses — the
+    // compositor then reprojects from the true render pose to the current
+    // head pose. Falls back to LOCAL when the meta packet was lost.
+    // (Approximate pairing: newest meta with newest decoded frame; exact
+    // frame-index matching lands with decoder queue plumbing.)
+    VideoMetaMsg meta;
+    if (decoder.takeFrameMeta(meta)) {
+        for (int eye = 0; eye < 2; eye++) {
+            const auto& v = meta.views[eye];
+            renderPoses_[eye].position = {v.px, v.py, v.pz};
+            renderPoses_[eye].orientation = {v.qx, v.qy, v.qz, v.qw};
+            renderFovs_[eye].angleLeft = v.fovLeft;
+            renderFovs_[eye].angleRight = v.fovRight;
+            renderFovs_[eye].angleUp = v.fovUp;
+            renderFovs_[eye].angleDown = v.fovDown;
+        }
+    }
+
     VideoDecoder::DecodedFrame df;
     if (decoder.latest(df)) {
         AHardwareBuffer* buf = nullptr;

@@ -262,9 +262,21 @@ void HostSession::feedLoop() {
         std::string from;
         uint16_t fromPort;
         size_t n = feedSock_.recvFrom(buf, sizeof(buf), from, fromPort);
-        if (n < sizeof(FeedPacketHeader)) continue;
+        if (n < 4) continue;
+        uint32_t magic = 0;
+        std::memcpy(&magic, buf, 4);
+
+        // Per-frame render poses arrive as a separate small datagram.
+        if (magic == kFeedMetaMagic) {
+            if (n < sizeof(FeedMetaMsg)) continue;
+            auto m = reinterpret_cast<const FeedMetaMsg*>(buf);
+            std::lock_guard<std::mutex> lk(feedMetaMx_);
+            feedMeta_[m->frameCounter] = m->meta;
+            if (feedMeta_.size() > 16) feedMeta_.erase(feedMeta_.begin());
+            continue;
+        }
+        if (magic != kFeedMagic) continue;
         auto h = reinterpret_cast<const FeedPacketHeader*>(buf);
-        if (h->magic != kFeedMagic) continue;
         if (h->fragIdx >= h->fragCount || h->fragCount == 0 || h->fragCount > 512) continue;
 
         auto& frags = feedFrags_[h->frameCounter];
@@ -282,6 +294,15 @@ void HostSession::feedLoop() {
 
         FedFrame ff;
         ff.ptsUs = feedPts_[h->frameCounter];
+        {
+            std::lock_guard<std::mutex> lk(feedMetaMx_);
+            auto mit = feedMeta_.find(h->frameCounter);
+            if (mit != feedMeta_.end()) {
+                ff.hasMeta = true;
+                ff.meta = mit->second;
+                feedMeta_.erase(mit);
+            }
+        }
         for (auto& f : frags) ff.annexB.insert(ff.annexB.end(), f.begin(), f.end());
 
         // Drop stale frame counters to bound memory.
@@ -324,6 +345,8 @@ void HostSession::encodeLoop() {
         if (idr) lastIdrUs_ = nowUs();
 
         std::vector<uint8_t> annexB;
+        bool hasMeta = false;
+        VideoMetaMsg meta{};
         if (cfg_.feedPort) {
             // SteamVR drives the cadence; wait for the driver's frame.
             std::unique_lock<std::mutex> lk(feedMx_);
@@ -334,6 +357,8 @@ void HostSession::encodeLoop() {
             feedQueue_.clear();
             annexB = std::move(latest.annexB);
             pts = latest.ptsUs;
+            hasMeta = latest.hasMeta;
+            meta = latest.meta;
             // Keyframe decision comes from the driver's frame 0 flag; the
             // bitstream already contains the IDR, flag only affects pacing
             // metadata on our side.
@@ -381,7 +406,18 @@ void HostSession::encodeLoop() {
 
         packetizer_.setFecPercent(fecPercent_.load());
         auto dgrams = packetizer_.packetize(annexB.data(), annexB.size(), fi, pts, idr);
-        queueVideoDatagrams(dgrams, fi, nowUs());
+        const uint64_t readyUs = nowUs();
+        if (hasMeta) {
+            // Render poses ride ahead of the video packets (timewarp
+            // contract); loss degrades to client-local poses, never a stall.
+            meta.frameIndex = fi;
+            meta.pts = pts;
+            std::lock_guard<std::mutex> lk(sendMx_);
+            sendQueue_.push_back(
+                {readyUs, buildDatagram(streamId_.load(), PacketType::VideoMeta,
+                                        stats_.sentPackets.load(), &meta, sizeof(meta))});
+        }
+        queueVideoDatagrams(dgrams, fi, readyUs);
 
         if (!cfg_.feedPort) std::this_thread::sleep_until(next);
     }

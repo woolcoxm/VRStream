@@ -123,6 +123,8 @@ class HostSession {
     struct FedFrame {
         uint64_t ptsUs = 0;
         std::vector<uint8_t> annexB;
+        bool hasMeta = false;
+        VideoMetaMsg meta{};
     };
     UdpSocket feedSock_;
     std::thread feedThread_;
@@ -131,6 +133,8 @@ class HostSession {
     std::deque<FedFrame> feedQueue_;
     std::map<uint32_t, std::vector<std::vector<uint8_t>>> feedFrags_;
     std::map<uint32_t, uint64_t> feedPts_;
+    std::map<uint32_t, VideoMetaMsg> feedMeta_;
+    std::mutex feedMetaMx_;
     void feedLoop();
 };
 

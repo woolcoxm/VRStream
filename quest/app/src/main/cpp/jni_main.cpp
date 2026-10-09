@@ -53,10 +53,13 @@ Java_com_vrstream_client_MainActivity_nativeStart(JNIEnv* env, jobject activity,
         g_running = false;
     };
 
-    // Wire: network frames -> decoder; renderer pose -> tracking uplink.
+    // Wire: network frames -> decoder (with render-pose metadata); renderer
+    // pose -> tracking uplink.
     if (!net->start(
-            [decoder](const uint8_t* data, size_t len, uint64_t pts, uint32_t, bool) {
+            [decoder](const uint8_t* data, size_t len, uint64_t pts, uint32_t, bool,
+                      const vrstream::VideoMetaMsg* meta) {
                 decoder->feed(data, len, pts);
+                if (meta) decoder->setFrameMeta(*meta);
             },
             [renderer] { return renderer->lastPose(); })) {
         LOGE("could not reach a VRStream host at %s:%u", hostStr.c_str(),
