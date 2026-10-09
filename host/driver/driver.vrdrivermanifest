@@ -1,0 +1,5 @@
+{
+    "name": "vrstream",
+    "requires": [],
+    "dlls": ["driver_vrstream.dll"]
+}

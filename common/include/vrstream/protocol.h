@@ -152,6 +152,23 @@ struct ControlAckMsg {
 
 constexpr uint32_t kProtocolVersion = 1;
 
+// Loopback feed protocol (SteamVR driver -> host process), one frame per
+// fragment set, UDP.
+constexpr uint32_t kFeedMagic = 0x46535256;  // 'VRSF'
+constexpr uint16_t kDefaultFeedPort = 9955;
+
+#pragma pack(push, 1)
+struct FeedPacketHeader {
+    uint32_t magic;
+    uint32_t frameCounter;
+    uint16_t fragIdx;
+    uint16_t fragCount;
+    uint32_t frameLen;
+    uint64_t ptsUs;
+};
+#pragma pack(pop)
+static_assert(sizeof(FeedPacketHeader) == 24);
+
 // Codec ids on the wire.
 enum class Codec : uint16_t {
     H264 = 0,

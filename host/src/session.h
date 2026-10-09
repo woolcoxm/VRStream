@@ -40,6 +40,9 @@ struct HostConfig {
     // NVENC output (validates FEC/NACK/pacing/reassembly without a GPU;
     // the payload layout is verified by the loopback client).
     bool noEncode = false;
+    // Receive encoded frames from the SteamVR driver on this loopback port
+    // (kDefaultFeedPort). 0 = internal test source.
+    uint16_t feedPort = 0;
 };
 
 class HostSession {
@@ -115,6 +118,20 @@ class HostSession {
     } stats_;
 
     uint64_t lastIdrUs_ = 0;
+
+    // Driver feed (encoded frames from the SteamVR driver process).
+    struct FedFrame {
+        uint64_t ptsUs = 0;
+        std::vector<uint8_t> annexB;
+    };
+    UdpSocket feedSock_;
+    std::thread feedThread_;
+    std::mutex feedMx_;
+    std::condition_variable feedCv_;
+    std::deque<FedFrame> feedQueue_;
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> feedFrags_;
+    std::map<uint32_t, uint64_t> feedPts_;
+    void feedLoop();
 };
 
 }  // namespace vrstream

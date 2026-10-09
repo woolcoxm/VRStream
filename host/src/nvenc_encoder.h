@@ -44,6 +44,11 @@ class NvencEncoder {
     bool encode(const uint8_t* srcRgba, size_t rowPitch, bool forceIdr,
                 uint64_t ptsUs, std::vector<uint8_t>& outAnnexB);
 
+    // GPU-to-GPU variant: copies `src` (same D3D11 device as the encoder)
+    // into the registered input texture with CopyResource, then encodes.
+    bool encodeGpu(ID3D11Texture2D* src, bool forceIdr, uint64_t ptsUs,
+                   std::vector<uint8_t>& outAnnexB);
+
     // Applies a new CBR bitrate (reconfigure; no session restart).
     void setBitrate(uint32_t bps);
 

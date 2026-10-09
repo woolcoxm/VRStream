@@ -20,6 +20,7 @@ static void usage() {
         "  --duration SEC    stop after SEC seconds (0 = until client disconnects)\n"
         "  --self-test       run an in-process loopback client and exit\n"
         "  --no-encode       transport test with deterministic payloads (no GPU needed)\n"
+        "  --feed-port N     receive driver-encoded frames on loopback N (default 9955 with SteamVR driver)\n"
         "  --test-loss PCT   packet drop percent injected in self-test (default 0)\n"
         "  --test-frames N   self-test frame count (default 300)\n"
         "  --test-out FILE   self-test raw bitstream output (default out.h264)\n");
@@ -58,6 +59,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--duration")) durationSec = atoi(next("--duration"));
         else if (!strcmp(argv[i], "--self-test")) cfg.selfTest = true;
         else if (!strcmp(argv[i], "--no-encode")) cfg.noEncode = true;
+        else if (!strcmp(argv[i], "--feed-port"))
+            cfg.feedPort = static_cast<uint16_t>(atoi(next("--feed-port")));
         else if (!strcmp(argv[i], "--test-loss")) cfg.selfTestLossPct = atof(next("--test-loss"));
         else if (!strcmp(argv[i], "--test-frames"))
             cfg.selfTestFrames = atoi(next("--test-frames"));

@@ -9,6 +9,8 @@ target_include_directories(vrstream_host PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(vrstream_host PRIVATE vrstream_common)
 target_compile_definitions(vrstream_host PRIVATE NOMINMAX)
 
+add_subdirectory(driver)
+
 if(MSVC)
     target_compile_options(vrstream_host PRIVATE /W4)
 endif()

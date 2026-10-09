@@ -121,6 +121,15 @@ int HostSession::run(int durationSec) {
     }
 
     running_ = true;
+    if (cfg_.feedPort) {
+        if (!feedSock_.bind(cfg_.feedPort)) {
+            std::fprintf(stderr, "failed to bind feed port %u\n", cfg_.feedPort);
+            running_ = false;
+        } else {
+            std::printf("receiving driver frames on loopback UDP %u\n", cfg_.feedPort);
+            feedThread_ = std::thread([this] { feedLoop(); });
+        }
+    }
     std::thread encodeTh([this] { encodeLoop(); });
     std::thread sendTh([this] { sendLoop(); });
     std::thread recvTh([this] { recvLoop(); });
@@ -141,10 +150,12 @@ int HostSession::run(int durationSec) {
     }
     running_ = false;
     sendCv_.notify_all();
+    feedCv_.notify_all();
     encodeTh.join();
     sendTh.join();
     recvTh.join();
     controlTh.join();
+    if (feedThread_.joinable()) feedThread_.join();
 
     StatsReportMsg rep;
     {
@@ -244,6 +255,50 @@ void HostSession::serviceNacks(const NackRequestMsg& nack, const std::string& ad
     }
 }
 
+void HostSession::feedLoop() {
+    uint8_t buf[2048];
+    while (running_) {
+        if (!feedSock_.waitReadable(100 * 1000)) continue;
+        std::string from;
+        uint16_t fromPort;
+        size_t n = feedSock_.recvFrom(buf, sizeof(buf), from, fromPort);
+        if (n < sizeof(FeedPacketHeader)) continue;
+        auto h = reinterpret_cast<const FeedPacketHeader*>(buf);
+        if (h->magic != kFeedMagic) continue;
+        if (h->fragIdx >= h->fragCount || h->fragCount == 0 || h->fragCount > 512) continue;
+
+        auto& frags = feedFrags_[h->frameCounter];
+        if (frags.empty()) frags.resize(h->fragCount);
+        size_t payloadLen = n - sizeof(FeedPacketHeader);
+        if (frags[h->fragIdx].empty())
+            frags[h->fragIdx].assign(buf + sizeof(FeedPacketHeader),
+                                     buf + sizeof(FeedPacketHeader) + payloadLen);
+        feedPts_[h->frameCounter] = h->ptsUs;
+
+        bool all = true;
+        for (auto& f : frags)
+            if (f.empty()) all = false;
+        if (!all) continue;
+
+        FedFrame ff;
+        ff.ptsUs = feedPts_[h->frameCounter];
+        for (auto& f : frags) ff.annexB.insert(ff.annexB.end(), f.begin(), f.end());
+
+        // Drop stale frame counters to bound memory.
+        if (feedFrags_.size() > 8) {
+            feedFrags_.erase(feedFrags_.begin());
+            feedPts_.erase(feedPts_.begin());
+        }
+        feedFrags_.erase(h->frameCounter);
+        feedPts_.erase(h->frameCounter);
+
+        std::lock_guard<std::mutex> lk(feedMx_);
+        while (feedQueue_.size() >= 3) feedQueue_.pop_front();  // newest-wins
+        feedQueue_.push_back(std::move(ff));
+        feedCv_.notify_one();
+    }
+}
+
 void HostSession::encodeLoop() {
     TestSource source(cfg_.width, cfg_.height);
     const auto period = std::chrono::microseconds(1000000 / cfg_.fps);
@@ -251,7 +306,7 @@ void HostSession::encodeLoop() {
     uint64_t n = 0;
 
     while (running_) {
-        next += period;
+        if (!cfg_.feedPort) next += period;
         uint64_t pts = nowUs();
         n++;
 
@@ -263,16 +318,36 @@ void HostSession::encodeLoop() {
                 idr = true;
                 std::printf("keyframe requested -> IDR\n");
             }
-        } else if (n % (cfg_.fps * 10) == 0) {
+        } else if (!cfg_.feedPort && n % (cfg_.fps * 10) == 0) {
             idr = true;  // periodic refresh safety net
         }
         if (idr) lastIdrUs_ = nowUs();
 
-        const uint8_t* rgba = cfg_.noEncode ? nullptr : source.render(n);
         std::vector<uint8_t> annexB;
+        if (cfg_.feedPort) {
+            // SteamVR drives the cadence; wait for the driver's frame.
+            std::unique_lock<std::mutex> lk(feedMx_);
+            feedCv_.wait_for(lk, std::chrono::milliseconds(100),
+                             [this] { return !feedQueue_.empty() || !running_.load(); });
+            if (feedQueue_.empty()) continue;
+            FedFrame latest = std::move(feedQueue_.back());
+            feedQueue_.clear();
+            annexB = std::move(latest.annexB);
+            pts = latest.ptsUs;
+            // Keyframe decision comes from the driver's frame 0 flag; the
+            // bitstream already contains the IDR, flag only affects pacing
+            // metadata on our side.
+            idr = false;
+            lk.unlock();
+            n++;
+        }
+
+        const uint8_t* rgba = (!cfg_.feedPort && !cfg_.noEncode) ? source.render(n) : nullptr;
         uint64_t t0 = nowUs();
         uint32_t fi = frameIndex_.fetch_add(1);
-        if (cfg_.noEncode) {
+        if (cfg_.feedPort) {
+            // Driver already encoded the frame; annexB/pts came from the feed.
+        } else if (cfg_.noEncode) {
             // Deterministic checksummed payload sized like a real encoded
             // frame at the target bitrate (keyframes ~3x). Layout:
             //   [0..4) magic | [4..8) frameIndex | [8..16) FNV-1a64(rest)
@@ -308,7 +383,7 @@ void HostSession::encodeLoop() {
         auto dgrams = packetizer_.packetize(annexB.data(), annexB.size(), fi, pts, idr);
         queueVideoDatagrams(dgrams, fi, pts);
 
-        std::this_thread::sleep_until(next);
+        if (!cfg_.feedPort) std::this_thread::sleep_until(next);
     }
 }
 
@@ -328,7 +403,7 @@ void HostSession::queueVideoDatagrams(std::vector<PacketizedDatagram>& dgrams,
         h.streamId = streamId_.load();
         h.type = static_cast<uint8_t>(PacketType::Video);
         h.datagramLen = static_cast<uint16_t>(dg.size());
-        h.sequence = stats_.sentPackets.load() + static_cast<uint32_t>(i);
+        h.sequence = static_cast<uint32_t>(stats_.sentPackets.load() + i);
         h.timestamp = nowUs();
         std::memcpy(dg.data(), &h, sizeof(h));
         std::memcpy(dg.data() + sizeof(h), &d.header, sizeof(VideoHeader));
@@ -589,12 +664,13 @@ void HostSession::runSelfTestClient() {
                 std::memcpy(&magic, frame->bytes.data(), 4);
                 std::memcpy(&frameNo, frame->bytes.data() + 4, 4);
                 std::memcpy(&storedHash, frame->bytes.data() + 8, 8);
-                uint64_t h = 0xcbf29ce484222325ull;
+                uint64_t fnv = 0xcbf29ce484222325ull;
                 for (size_t i = 16; i < frame->bytes.size(); i++) {
-                    h ^= frame->bytes[i];
-                    h *= 0x100000001b3ull;
+                    fnv ^= frame->bytes[i];
+                    fnv *= 0x100000001b3ull;
                 }
-                valid = magic == 0x56525331u && storedHash == h && frameNo == frame->frameIndex;
+                valid = magic == 0x56525331u && storedHash == fnv &&
+                        frameNo == frame->frameIndex;
             }
             if (!valid) corruptFrames++;
             out.write(reinterpret_cast<const char*>(frame->bytes.data()), frame->bytes.size());

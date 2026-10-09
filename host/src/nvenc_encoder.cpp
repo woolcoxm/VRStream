@@ -364,6 +364,70 @@ bool NvencEncoder::encode(const uint8_t* srcRgba, size_t rowPitch, bool forceIdr
     return ok;
 }
 
+bool NvencEncoder::encodeGpu(ID3D11Texture2D* src, bool forceIdr, uint64_t ptsUs,
+                             std::vector<uint8_t>& outAnnexB) {
+    Impl* im = impl_.get();
+    if (!im || !im->encoder || !src) return false;
+
+    if (im->pendingBitrateBps && im->pendingBitrateBps != im->bitrateBps) {
+        im->bitrateBps = im->pendingBitrateBps;
+        im->encodeConfig.rcParams.averageBitRate = im->bitrateBps;
+        im->encodeConfig.rcParams.maxBitRate = im->bitrateBps;
+        im->encodeConfig.rcParams.vbvBufferSize =
+            static_cast<uint32_t>((double)im->bitrateBps / im->fps * 1.1);
+        im->encodeConfig.rcParams.vbvInitialDelay =
+            im->encodeConfig.rcParams.vbvBufferSize;
+        NV_ENC_RECONFIGURE_PARAMS rp{};
+        rp.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+        rp.reInitEncodeParams = im->initParams;
+        rp.reInitEncodeParams.encodeConfig = &im->encodeConfig;
+        im->nv.nvEncReconfigureEncoder(im->encoder, &rp);
+        im->pendingBitrateBps = 0;
+    }
+
+    const size_t idx = im->nextBuffer;
+    im->nextBuffer = (im->nextBuffer + 1) % Impl::kInFlight;
+    im->ctx->CopyResource(im->inputTex[idx], src);
+
+    NV_ENC_MAP_INPUT_RESOURCE mapped{};
+    mapped.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
+    mapped.registeredResource = im->registered[idx].registeredResource;
+    NVENC_CALL(im, im->nv.nvEncMapInputResource(im->encoder, &mapped), return false);
+
+    NV_ENC_PIC_PARAMS pic{};
+    pic.version = NV_ENC_PIC_PARAMS_VER;
+    pic.inputWidth = im->width;
+    pic.inputHeight = im->height;
+    pic.inputPitch = im->width;
+    pic.inputTimeStamp = ptsUs;
+    pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+    pic.inputBuffer = mapped.mappedResource;
+    pic.bufferFmt = mapped.mappedBufferFmt;
+    pic.outputBitstream = im->bitstream[idx].bitstreamBuffer;
+    if (forceIdr) pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
+
+    NVENCSTATUS st = im->nv.nvEncEncodePicture(im->encoder, &pic);
+    if (st != NV_ENC_SUCCESS) {
+        std::fprintf(stderr, "nvEncEncodePicture failed: %d\n", (int)st);
+        im->nv.nvEncUnmapInputResource(im->encoder, mapped.mappedResource);
+        return false;
+    }
+
+    NV_ENC_LOCK_BITSTREAM lock{};
+    lock.version = NV_ENC_LOCK_BITSTREAM_VER;
+    lock.outputBitstream = im->bitstream[idx].bitstreamBuffer;
+    lock.doNotWait = 0;
+    bool ok = true;
+    NVENC_CALL(im, im->nv.nvEncLockBitstream(im->encoder, &lock), ok = false);
+    if (ok) {
+        const uint8_t* p = static_cast<const uint8_t*>(lock.bitstreamBufferPtr);
+        outAnnexB.insert(outAnnexB.end(), p, p + lock.bitstreamSizeInBytes);
+        im->nv.nvEncUnlockBitstream(im->encoder, lock.outputBitstream);
+    }
+    im->nv.nvEncUnmapInputResource(im->encoder, mapped.mappedResource);
+    return ok;
+}
+
 void NvencEncoder::setBitrate(uint32_t bps) {
     if (impl_) impl_->pendingBitrateBps = bps;
 }
