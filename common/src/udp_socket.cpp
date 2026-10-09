@@ -8,14 +8,17 @@
 #endif
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+using SocketHandle = SOCKET;
 #else
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+using SocketHandle = int;
 #endif
 
 namespace vrstream {
@@ -35,7 +38,7 @@ void initSocketsOnce() {
 void setNonBlocking(int64_t s) {
 #ifdef _WIN32
     u_long mode = 1;
-    ioctlsocket(static_cast<SOCKET>(s), FIONBIO, &mode);
+    ioctlsocket(static_cast<SocketHandle>(s), FIONBIO, &mode);
 #else
     int flags = fcntl(static_cast<int>(s), F_GETFL, 0);
     fcntl(static_cast<int>(s), F_SETFL, flags | O_NONBLOCK);
@@ -59,7 +62,7 @@ std::string addrToString(const sockaddr_storage& ss) {
 UdpSocket::~UdpSocket() {
     if (sock_ != -1) {
 #ifdef _WIN32
-        closesocket(static_cast<SOCKET>(sock_));
+        closesocket(static_cast<SocketHandle>(sock_));
 #else
         close(static_cast<int>(sock_));
 #endif
@@ -72,32 +75,32 @@ bool UdpSocket::bind(uint16_t port) {
     if (sock_ < 0) return false;
 
     int reuse = 1;
-    setsockopt(static_cast<SOCKET>(sock_), SOL_SOCKET, SO_REUSEADDR,
+    setsockopt(static_cast<SocketHandle>(sock_), SOL_SOCKET, SO_REUSEADDR,
                reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
-    if (::bind(static_cast<SOCKET>(sock_), reinterpret_cast<sockaddr*>(&addr),
+    if (::bind(static_cast<SocketHandle>(sock_), reinterpret_cast<sockaddr*>(&addr),
                sizeof(addr)) != 0) {
         return false;
     }
 
     sockaddr_in bound{};
     socklen_t len = sizeof(bound);
-    getsockname(static_cast<SOCKET>(sock_), reinterpret_cast<sockaddr*>(&bound), &len);
+    getsockname(static_cast<SocketHandle>(sock_), reinterpret_cast<sockaddr*>(&bound), &len);
     localPort_ = ntohs(bound.sin_port);
     setNonBlocking(sock_);
     int buf = 4 * 1024 * 1024;  // absorb bursts without dropping
-    setsockopt(static_cast<SOCKET>(sock_), SOL_SOCKET, SO_RCVBUF,
+    setsockopt(static_cast<SocketHandle>(sock_), SOL_SOCKET, SO_RCVBUF,
                reinterpret_cast<const char*>(&buf), sizeof(buf));
     return true;
 }
 
 bool UdpSocket::enableBroadcast() {
     int on = 1;
-    return setsockopt(static_cast<SOCKET>(sock_), SOL_SOCKET, SO_BROADCAST,
+    return setsockopt(static_cast<SocketHandle>(sock_), SOL_SOCKET, SO_BROADCAST,
                       reinterpret_cast<const char*>(&on), sizeof(on)) == 0;
 }
 
@@ -107,7 +110,7 @@ void UdpSocket::setDscpEf() {
     // configurations; QoS via SIO_APPLY_TRANSPORT_SETTING is not worth the
     // complexity for v1. WMM classification still favors small UDP.
     DWORD dscp = 46 << 2;
-    setsockopt(static_cast<SOCKET>(sock_), IPPROTO_IP, IP_TOS,
+    setsockopt(static_cast<SocketHandle>(sock_), IPPROTO_IP, IP_TOS,
                reinterpret_cast<const char*>(&dscp), sizeof(dscp));
 #else
     int tos = 46 << 2;
@@ -121,7 +124,7 @@ bool UdpSocket::sendTo(const std::string& addr, uint16_t port, const uint8_t* da
     to.sin_family = AF_INET;
     to.sin_port = htons(port);
     if (inet_pton(AF_INET, addr.c_str(), &to.sin_addr) != 1) return false;
-    int n = sendto(static_cast<SOCKET>(sock_), reinterpret_cast<const char*>(data),
+    int n = sendto(static_cast<SocketHandle>(sock_), reinterpret_cast<const char*>(data),
                    static_cast<int>(len), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
     return n == static_cast<int>(len);
 }
@@ -130,7 +133,7 @@ size_t UdpSocket::recvFrom(uint8_t* buf, size_t cap, std::string& fromAddr,
                            uint16_t& fromPort) {
     sockaddr_storage from{};
     socklen_t flen = sizeof(from);
-    int n = recvfrom(static_cast<SOCKET>(sock_), reinterpret_cast<char*>(buf),
+    int n = recvfrom(static_cast<SocketHandle>(sock_), reinterpret_cast<char*>(buf),
                      static_cast<int>(cap), 0, reinterpret_cast<sockaddr*>(&from), &flen);
     if (n <= 0) return 0;
     fromAddr = addrToString(from);
@@ -144,7 +147,7 @@ size_t UdpSocket::recvFrom(uint8_t* buf, size_t cap, std::string& fromAddr,
 bool UdpSocket::waitReadable(uint64_t timeoutUs) {
     fd_set rfds;
     FD_ZERO(&rfds);
-    FD_SET(static_cast<SOCKET>(sock_), &rfds);
+    FD_SET(static_cast<SocketHandle>(sock_), &rfds);
     timeval tv{};
     tv.tv_sec = static_cast<long>(timeoutUs / 1000000);
     tv.tv_usec = static_cast<long>(timeoutUs % 1000000);

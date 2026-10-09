@@ -37,7 +37,8 @@ class CongestionController {
         float delayTrendThreshold = 0.15f;
     };
 
-    explicit CongestionController(Config cfg = {}) : cfg_(cfg), bitrate_(cfg.startBitrateBps) {}
+    explicit CongestionController(Config cfg) : cfg_(cfg), bitrate_(cfg.startBitrateBps) {}
+    CongestionController() : CongestionController(Config{}) {}
 
     // Called every decisionIntervalMs with fresh receiver stats.
     uint32_t update(const CongestionInputs& in) {
