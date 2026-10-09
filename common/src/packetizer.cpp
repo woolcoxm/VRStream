@@ -107,6 +107,7 @@ std::optional<ReceivedFrame> FrameReceiver::ingest(const VideoHeader& hdr,
     if (!slot.empty()) return std::nullopt;  // duplicate
     slot.assign(payload, payload + payloadLen);
     grp.received++;
+    grp.lastRxUs = nowUs();
 
     if (tryComplete(fs)) {
         ReceivedFrame rf;
@@ -165,8 +166,11 @@ void FrameReceiver::tryFec(GroupState& g) {
     size_t haveRepairs = 0;
     for (auto& r : g.repairs)
         if (!r.empty()) haveRepairs++;
-    if (missing == 0 || missing > haveRepairs) {
-        if (missing > g.fecCount) fecFailed_++;
+    if (missing == 0) return;
+    if (missing > haveRepairs) {
+        // Genuinely unrecoverable only once every repair packet arrived and
+        // the group is still short; before that it is simply still in flight.
+        if (haveRepairs == g.fecCount && missing > haveRepairs) fecFailed_++;
         return;
     }
 
@@ -192,13 +196,15 @@ void FrameReceiver::tryFec(GroupState& g) {
     if (any) fecRecovered_++;
 }
 
-std::vector<NackEntry> FrameReceiver::pendingNacks(uint64_t /*nowUs*/,
-                                                   uint64_t staleAfterUs) const {
+std::vector<NackEntry> FrameReceiver::pendingNacks(uint64_t staleAfterUs,
+                                                   uint64_t quietUs) const {
     std::vector<NackEntry> nacks;
+    uint64_t now = nowUs();
     for (auto& [fi, fs] : frames_) {
         if (haveDelivered_ && fi <= lastDelivered_) continue;
-        if (nowUs() - fs.group.begin()->second.firstRxUs > staleAfterUs) continue;
+        if (now - fs.group.begin()->second.firstRxUs > staleAfterUs) continue;
         for (auto& [gi, g] : fs.group) {
+            if (g.lastRxUs == 0 || now - g.lastRxUs < quietUs) continue;  // still arriving
             size_t missing = 0;
             for (auto& d : g.data)
                 if (d.empty()) missing++;

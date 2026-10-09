@@ -64,8 +64,12 @@ class FrameReceiver {
     std::optional<ReceivedFrame> ingest(const VideoHeader& hdr, const uint8_t* payload,
                                         size_t payloadLen);
 
-    // Packets still missing for `frame` (for NACK). Empty when nothing useful.
-    std::vector<NackEntry> pendingNacks(uint64_t nowUs, uint64_t staleAfterUs) const;
+    // Packets still missing for undelivered frames (for NACK). A group is
+    // only considered NACKable after it has been quiet for `quietUs` since
+    // its last received packet — paced frames legitimately take a few ms to
+    // finish arriving, and NACKing those only wastes upstream bandwidth.
+    std::vector<NackEntry> pendingNacks(uint64_t staleAfterUs,
+                                        uint64_t quietUs = 3000) const;
 
     uint32_t fecRecoveredFrames() const { return fecRecovered_; }
     uint32_t fecFailedFrames() const { return fecFailed_; }
@@ -78,6 +82,7 @@ class FrameReceiver {
         size_t received = 0;                       // data + repair packets received
         bool decoded = false;
         uint64_t firstRxUs = 0;
+        uint64_t lastRxUs = 0;
         uint16_t dataCount = 0, fecCount = 0;
         uint32_t frameBytes = 0;
         uint64_t pts = 0;

@@ -174,7 +174,7 @@ static void testPacketizerNackAndStale() {
             got = r;
     }
     CHECK(!got.has_value());
-    auto nacks = receiver.pendingNacks(vrstream::nowUs(), 100000);
+    auto nacks = receiver.pendingNacks(100000, 0);
     CHECK(nacks.size() == 1);
     CHECK(nacks[0].packetIdx == 2);
 
