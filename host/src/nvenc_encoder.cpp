@@ -66,6 +66,18 @@ bool NvencEncoder::probe(ID3D11Device* device, Caps* capsOut) {
         return false;
     }
 
+    using GetMaxVersionFn = NVENCSTATUS(NVENCAPI*)(uint32_t*);
+    auto getMaxVersion =
+        reinterpret_cast<GetMaxVersionFn>(GetProcAddress(dll, "NvEncodeAPIGetMaxSupportedVersion"));
+    if (getMaxVersion) {
+        uint32_t maxVer = 0;
+        if (getMaxVersion(&maxVer) == NV_ENC_SUCCESS) {
+            std::fprintf(stderr, "probe: driver max NVENC API %u.%u (app built for %d.%d)\n",
+                         maxVer >> 0 & 0xFF, maxVer >> 8 & 0xFF, NVENCAPI_MAJOR_VERSION,
+                         NVENCAPI_MINOR_VERSION);
+        }
+    }
+
     using CreateInstanceFn = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
     auto createInstance =
         reinterpret_cast<CreateInstanceFn>(GetProcAddress(dll, "NvEncodeAPICreateInstance"));
@@ -218,7 +230,11 @@ bool NvencEncoder::init(ID3D11Device* device, Codec codec, uint32_t width, uint3
     rc.lookaheadDepth = 0;
     rc.disableIadapt = 0;
     rc.disableBadapt = 0;
-    rc.enableAQ = 1;  // spatial AQ
+    // Spatial AQ requires CABAC entropy coding (driver rejects the
+    // combination with INVALID_PARAM); CAVLC wins for decode latency on the
+    // H.264 path, so AQ only stays on for CABAC-capable configs.
+    bool cavlcH264 = (codec == Codec::H264);
+    rc.enableAQ = cavlcH264 ? 0 : 1;
 
     if (codec == Codec::H264) {
         NV_ENC_CONFIG_H264& h = im->encodeConfig.encodeCodecConfig.h264Config;
@@ -227,7 +243,8 @@ bool NvencEncoder::init(ID3D11Device* device, Codec codec, uint32_t width, uint3
         h.outputBufferingPeriodSEI = 0;
         h.outputPictureTimingSEI = 0;
         h.useBFramesAsRef = NV_ENC_BFRAME_REF_MODE_DISABLED;
-        // CAVLC: measurably faster decode on mobile decoders (ALVR default).
+        // CAVLC: measurably faster decode on mobile decoders (ALVR default);
+        // forces AQ off (see rate-control setup above).
         h.entropyCodingMode = NV_ENC_H264_ENTROPY_CODING_MODE_CAVLC;
         h.level = 0;  // auto
     } else if (codec == Codec::H265 || codec == Codec::H26510) {
@@ -245,6 +262,7 @@ bool NvencEncoder::init(ID3D11Device* device, Codec codec, uint32_t width, uint3
     NV_ENC_INITIALIZE_PARAMS& ip = im->initParams;
     ip.version = NV_ENC_INITIALIZE_PARAMS_VER;
     ip.encodeGUID = im->encodeGuid;
+    ip.presetGUID = NV_ENC_PRESET_P4_GUID;  // required even with custom encodeConfig
     ip.encodeWidth = width;
     ip.encodeHeight = height;
     ip.darWidth = width;

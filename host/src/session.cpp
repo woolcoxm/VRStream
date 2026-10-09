@@ -381,14 +381,17 @@ void HostSession::encodeLoop() {
 
         packetizer_.setFecPercent(fecPercent_.load());
         auto dgrams = packetizer_.packetize(annexB.data(), annexB.size(), fi, pts, idr);
-        queueVideoDatagrams(dgrams, fi, pts);
+        queueVideoDatagrams(dgrams, fi, nowUs());
 
         if (!cfg_.feedPort) std::this_thread::sleep_until(next);
     }
 }
 
 void HostSession::queueVideoDatagrams(std::vector<PacketizedDatagram>& dgrams,
-                                      uint32_t frameIndex, uint64_t frameStartUs) {
+                                      uint32_t frameIndex, uint64_t frameReadyUs) {
+    // Pacing anchors to when the frame became ready (post-encode), not its
+    // capture timestamp: a slow encode must not turn every deadline into the
+    // past and degenerate the pacer into a burst.
     const uint64_t interval = 1000000 / cfg_.fps;
     const uint64_t window = interval * 6 / 10;  // spread over 60% of the frame
     const uint64_t per = window / (dgrams.size() ? dgrams.size() : 1);
@@ -425,7 +428,7 @@ void HostSession::queueVideoDatagrams(std::vector<PacketizedDatagram>& dgrams,
     }
 
     std::lock_guard<std::mutex> lk(sendMx_);
-    uint64_t at = frameStartUs;
+    uint64_t at = frameReadyUs;
     for (auto& dg : wire) {
         sendQueue_.push_back({at, std::move(dg)});
         stats_.sentPackets++;
@@ -656,23 +659,26 @@ void HostSession::runSelfTestClient() {
 
         if (auto frame = receiver.ingest(*vh, payload, payloadLen)) {
             framesGot++;
-            // Verify the deterministic payload (transport integrity check).
-            bool valid = frame->bytes.size() >= 16;
-            if (valid) {
-                uint32_t magic = 0, frameNo = 0;
-                uint64_t storedHash = 0;
-                std::memcpy(&magic, frame->bytes.data(), 4);
-                std::memcpy(&frameNo, frame->bytes.data() + 4, 4);
-                std::memcpy(&storedHash, frame->bytes.data() + 8, 8);
-                uint64_t fnv = 0xcbf29ce484222325ull;
-                for (size_t i = 16; i < frame->bytes.size(); i++) {
-                    fnv ^= frame->bytes[i];
-                    fnv *= 0x100000001b3ull;
+            // Verify the deterministic payload (transport integrity check);
+            // real encoder output is validated externally with ffprobe.
+            if (cfg_.noEncode) {
+                bool valid = frame->bytes.size() >= 16;
+                if (valid) {
+                    uint32_t magic = 0, frameNo = 0;
+                    uint64_t storedHash = 0;
+                    std::memcpy(&magic, frame->bytes.data(), 4);
+                    std::memcpy(&frameNo, frame->bytes.data() + 4, 4);
+                    std::memcpy(&storedHash, frame->bytes.data() + 8, 8);
+                    uint64_t fnv = 0xcbf29ce484222325ull;
+                    for (size_t i = 16; i < frame->bytes.size(); i++) {
+                        fnv ^= frame->bytes[i];
+                        fnv *= 0x100000001b3ull;
+                    }
+                    valid = magic == 0x56525331u && storedHash == fnv &&
+                            frameNo == frame->frameIndex;
                 }
-                valid = magic == 0x56525331u && storedHash == fnv &&
-                        frameNo == frame->frameIndex;
+                if (!valid) corruptFrames++;
             }
-            if (!valid) corruptFrames++;
             out.write(reinterpret_cast<const char*>(frame->bytes.data()), frame->bytes.size());
             int64_t offset = 0;
             if (sync.offsetUs(offset)) {

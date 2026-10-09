@@ -67,7 +67,7 @@ class HostSession {
                         uint16_t fromPort);
     void serviceNacks(const NackRequestMsg& nack, const std::string& addr, uint16_t port);
     void queueVideoDatagrams(std::vector<PacketizedDatagram>& dgrams, uint32_t frameIndex,
-                             uint64_t frameStartUs);
+                             uint64_t frameReadyUs);
 
     HostConfig cfg_;
     UdpSocket sock_;

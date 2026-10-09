@@ -32,6 +32,7 @@ enum class PacketType : uint8_t {
     Haptics = 21,
     // Unreliable video (FEC protected).
     Video = 30,
+    VideoMeta = 31,  // per-frame render poses/fovs; loss degrades to LOCAL pose
 };
 
 enum VideoFlags : uint8_t {
@@ -59,12 +60,31 @@ struct VideoHeader {
     uint16_t fecCount;   // repair packets in this group
     uint8_t isFec;       // 0: data packet, 1: repair packet
     uint8_t flags;       // VideoFlags
-    uint16_t packetInGroup;  // data index within group (data) or repair index (fec)
+    uint16_t packetInGroup;  // data idx (data) or repair idx (fec)
     uint32_t payloadOffset;    // byte offset of this packet's payload in the frame
     uint32_t frameBytes;       // logical frame size (without FEC padding)
     uint64_t pts;              // capture timestamp, sender clock, microseconds
 };
 static_assert(sizeof(VideoHeader) == 30);
+
+// Per-frame view metadata: the poses SteamVR rendered the frame with, plus
+// FOVs. Sent once per frame ahead of the video packets. If lost, the client
+// falls back to locally located poses for that frame (correct rendering,
+// slightly less effective timewarp) — no stall, no IDR.
+struct ViewInfoLite {
+    float px, py, pz;
+    float qx, qy, qz, qw;
+    float fovLeft, fovRight, fovUp, fovDown;  // radians, OpenXR convention
+};
+static_assert(sizeof(ViewInfoLite) == 44);
+
+struct VideoMetaMsg {
+    uint32_t frameIndex;
+    uint32_t reserved;
+    uint64_t pts;
+    ViewInfoLite views[2];
+};
+static_assert(sizeof(VideoMetaMsg) == 16 + 88);
 
 struct HandshakeRequestMsg {
     uint32_t protocolVersion;
@@ -150,11 +170,12 @@ struct ControlAckMsg {
 
 #pragma pack(pop)
 
-constexpr uint32_t kProtocolVersion = 1;
+constexpr uint32_t kProtocolVersion = 2;
 
 // Loopback feed protocol (SteamVR driver -> host process), one frame per
 // fragment set, UDP.
 constexpr uint32_t kFeedMagic = 0x46535256;  // 'VRSF'
+constexpr uint32_t kFeedMetaMagic = 0x4D535256;  // 'VRSM' (driver -> host, per-frame render poses)
 constexpr uint16_t kDefaultFeedPort = 9955;
 
 #pragma pack(push, 1)
@@ -166,8 +187,16 @@ struct FeedPacketHeader {
     uint32_t frameLen;
     uint64_t ptsUs;
 };
+
+struct FeedMetaMsg {
+    uint32_t magic;  // kFeedMetaMagic
+    uint32_t frameCounter;
+    uint64_t ptsUs;
+    VideoMetaMsg meta;
+};
 #pragma pack(pop)
 static_assert(sizeof(FeedPacketHeader) == 24);
+static_assert(sizeof(FeedMetaMsg) == 16 + sizeof(VideoMetaMsg));
 
 // Codec ids on the wire.
 enum class Codec : uint16_t {
