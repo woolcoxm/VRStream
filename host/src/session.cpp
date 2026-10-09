@@ -568,7 +568,7 @@ void HostSession::controlLoop() {
             uint32_t activeBr = encoder_.ok() ? encoder_.bitrate() : congestion_.bitrate();
             std::printf(
                 "%3u fps | enc %4.1fms %6.1fKB/f | br %4.0fM (tgt %4.0fM) | rtt "
-                "%4.1fms backlog %u dec %4.1fms age %5.1fms | loss %u fec ok/fail "
+                "%4.1fms backlog %u dec %4.1fms age %5.1fms | loss %u fec ok/short "
                 "%u/%u retx %llu | pkts %llu\n",
                 fps, encMs, frameKB, activeBr / 1e6,
                 congestion_.bitrate() / 1e6, rep.rttMs, rep.decodeBacklog, rep.decodeMs,
