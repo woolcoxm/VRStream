@@ -1,0 +1,33 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -G "Visual Studio 17 2022" -A x64 -B build -S .
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Unit tests
+        run: ./build/common/Release/vrstream_tests.exe
+
+      - name: Transport self-test (no encode)
+        run: ./build/host/Release/vrstream_host.exe --self-test --no-encode --test-frames 180 --duration 8
+
+      - name: Transport self-test with 5% loss
+        run: ./build/host/Release/vrstream_host.exe --self-test --no-encode --test-loss 5 --test-frames 180 --duration 8
+
+      - name: Upload host binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrstream_host-windows-x64
+          path: build/host/Release/vrstream_host.exe
