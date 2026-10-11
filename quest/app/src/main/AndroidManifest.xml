@@ -28,6 +28,12 @@
         <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
         <meta-data android:name="com.oculus.supportedDevices" android:value="all" />
 
+        <!-- Full-space immersive window: without this the activity opens as a
+             2D panel and the OpenXR session never becomes VISIBLE. -->
+        <property
+            android:name="android.window.PROPERTY_XR_ACTIVITY_START_MODE"
+            android:value="XR_ACTIVITY_START_MODE_FULL_SPACE_UNMANAGED" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
