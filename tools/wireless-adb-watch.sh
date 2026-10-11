@@ -8,13 +8,16 @@ PC_IP="10.0.0.31"
 DEADLINE=$(( $(date +%s) + 3000 ))
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-    # Reconnect to known wireless device first (if it rebooted, this fails).
-    if adb connect 10.0.0.162:5555 >/dev/null 2>&1; then
-        if adb devices | grep -q "10.0.0.162:5555.*device"; then
-            echo "$(date +%T) wireless device already up"
-            break
-        fi
+    # Reconnect to known wireless device first; VERIFY it actually answers,
+    # because adb caches stale "device" entries after the headset dies.
+    adb disconnect 10.0.0.162:5555 >/dev/null 2>&1
+    adb connect 10.0.0.162:5555 >/dev/null 2>&1
+    if adb -s 10.0.0.162:5555 shell echo ok 2>/dev/null | grep -q "^ok$"; then
+        echo "$(date +%T) wireless device alive"
+        echo "10.0.0.162" > /tmp/vrs-ip
+        break
     fi
+    adb disconnect 10.0.0.162:5555 >/dev/null 2>&1
     LINE=$(adb devices 2>/dev/null | awk 'NR>1 && NF>1 {print}')
     [ -z "$LINE" ] && { sleep 5; continue; }
     STATUS=$(echo "$LINE" | awk '{print $2}')

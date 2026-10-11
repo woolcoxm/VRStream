@@ -37,7 +37,7 @@ void main() {
 
 // The video frame holds both eyes side by side; each eye samples its half.
 const char* kFragmentShader = R"glsl(#version 300 es
-#extension GL_OES_EGL_image_external : require
+#extension GL_OES_EGL_image_external_essl3 : require
 precision mediump float;
 uniform samplerExternalOES uVideo;
 uniform lowp int uEye;
@@ -151,6 +151,20 @@ bool XrRenderer::initOpenXr(uint32_t streamW, uint32_t streamH, uint32_t refresh
     XrSessionCreateInfo si{XR_TYPE_SESSION_CREATE_INFO};
     si.next = &gb;
     si.systemId = systemId;
+
+    // Mandatory before session creation on GLES runtimes (Oculus enforces:
+    // XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING otherwise).
+    PFN_xrGetOpenGLESGraphicsRequirementsKHR getGlesReqs = nullptr;
+    xrGetInstanceProcAddr(instance_, "xrGetOpenGLESGraphicsRequirementsKHR",
+                          (PFN_xrVoidFunction*)&getGlesReqs);
+    if (getGlesReqs) {
+        XrGraphicsRequirementsOpenGLESKHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
+        XR_CHECK(getGlesReqs(instance_, systemId, &req), return false);
+        LOGI("GLES requirements: min %d.%d (runtime ok)",
+             (int)(req.minApiVersionSupported >> 48),
+             (int)((req.minApiVersionSupported >> 32) & 0xFFFF));
+    }
+
     XR_CHECK(xrCreateSession(instance_, &si, &session_), return false);
 
     XrReferenceSpaceCreateInfo rs{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};

@@ -35,6 +35,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        Log.i(TAG, "onResume (nativeRunning=" + nativeRunning + ")");
         if (nativeRunning) return;
 
         WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -75,6 +76,16 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        // Transient overlays (first-launch "unknown source" dialog, system
+        // prompts) pause us without stopping; the native render loop simply
+        // waits (xrWaitFrame) and resumes when we're foreground again.
+        Log.i(TAG, "onPause (nativeRunning=" + nativeRunning + ")");
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Log.i(TAG, "onStop (nativeRunning=" + nativeRunning + ")");
         if (nativeRunning) {
             nativeStop();
             nativeRunning = false;

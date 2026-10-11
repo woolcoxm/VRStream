@@ -144,9 +144,10 @@ int HostSession::run(int durationSec) {
         if (streaming_ && stats_.lastReportAtUs &&
             nowUs() - stats_.lastReportAtUs > 3'000'000) {
             std::printf("client went silent, ending session\n");
-            break;
+            streaming_ = false;
         }
-        if (!streaming_) break;
+        // A disconnect returns us to listening; the recv thread
+        // accepts the next handshake and re-arms streaming_.
     }
     running_ = false;
     sendCv_.notify_all();
@@ -231,9 +232,8 @@ void HostSession::handleReceived(const uint8_t* buf, size_t len, const std::stri
             keyframeRequested_ = true;
             break;
         case PacketType::Disconnect:
-            std::printf("client disconnected\n");
+            std::printf("client disconnected; waiting for a new one\n");
             streaming_ = false;
-            running_ = false;
             break;
         default:
             break;
@@ -327,6 +327,10 @@ void HostSession::encodeLoop() {
     uint64_t n = 0;
 
     while (running_) {
+        if (!streaming_) {  // between clients: idle, no frames
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
         if (!cfg_.feedPort) next += period;
         uint64_t pts = nowUs();
         n++;
