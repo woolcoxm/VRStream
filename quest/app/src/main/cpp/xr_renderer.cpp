@@ -300,6 +300,12 @@ void XrRenderer::run(std::atomic<bool>& running, VideoDecoder& decoder) {
                         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
                     XR_CHECK(xrBeginSession(session_, &sbi), break);
                 }
+                if (sessionState_ == XR_SESSION_STATE_STOPPING) {
+                    // Headset doffed / app losing focus: end the running
+                    // session so the runtime can hand us READY again later.
+                    xrEndSession(session_);
+                    sessionState_ = XR_SESSION_STATE_IDLE;
+                }
             }
             ed = {XR_TYPE_EVENT_DATA_BUFFER};
         }

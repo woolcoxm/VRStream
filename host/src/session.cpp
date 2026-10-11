@@ -196,6 +196,13 @@ void HostSession::handleReceived(const uint8_t* buf, size_t len, const std::stri
             resp.bitrateBps = cfg_.bitrateBps;
             resp.fecPercent = static_cast<uint16_t>(cfg_.fecPercent * 100);
             resp.mtu = cfg_.mtu;
+            // Fresh session: stale stats from a previous client must not
+            // immediately trigger the silence watchdog.
+            {
+                std::lock_guard<std::mutex> lk(stats_.rxMx_);
+                stats_.lastReportAtUs = 0;
+                stats_.lastReport = {};
+            }
             sendControlTo(from, fromPort, PacketType::HandshakeResponse, &resp, sizeof(resp));
             std::printf("client %s:%u connected: %s (%ux%u@%u, codecs=0x%x)\n",
                         from.c_str(), fromPort, req->deviceName, req->eyeWidth,
