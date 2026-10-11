@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
     }
 
     vr::EVRInitError err = vr::VRInitError_None;
-    init(&err, vr::VRApplication_Background, "vrstream_chaperone_commit");
+    init(&err, vr::VRApplication_Other, "vrstream_chaperone_commit");
     if (err != vr::VRInitError_None) {
         std::printf("VR_InitInternal2 error %d (is SteamVR running?)\n", (int)err);
         return 1;
