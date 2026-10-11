@@ -21,16 +21,26 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/VrTheme">
+
+        <!-- Horizon OS: treat us as a VR-only immersive app (without this the
+             system keeps the focus placeholder = eternal loading dots). -->
+        <meta-data android:name="com.oculus.intent.category.VR" android:value="vr_only" />
+        <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
+        <meta-data android:name="com.oculus.supportedDevices" android:value="all" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|navigation|uiMode">
+            android:resizeableActivity="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="com.oculus.intent.category.VR" />
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
             </intent-filter>
         </activity>
     </application>

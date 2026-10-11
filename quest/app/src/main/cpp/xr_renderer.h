@@ -77,6 +77,7 @@ class XrRenderer {
     XrPosef renderPoses_[2]{};
     XrFovf renderFovs_[2]{};
     XrCompositionLayerProjection layer_{};
+    XrSessionState sessionState_ = XR_SESSION_STATE_IDLE;
 
     std::mutex poseMx_;
     PoseSample lastPose_{};

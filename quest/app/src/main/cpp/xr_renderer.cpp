@@ -5,7 +5,9 @@
 #include <media/NdkImage.h>
 #include <openxr/openxr_platform.h>
 
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include "vrstream/common.h"
@@ -283,15 +285,49 @@ bool XrRenderer::importHardwareBuffer(AHardwareBuffer* buf) {
 
 void XrRenderer::run(std::atomic<bool>& running, VideoDecoder& decoder) {
     while (running.load()) {
+        // Session state machine: pump events, begin the session when the
+        // runtime reports READY (xrWaitFrame before that returns
+        // XR_ERROR_SESSION_NOT_READY on Oculus runtimes).
+        XrEventDataBuffer ed{XR_TYPE_EVENT_DATA_BUFFER};
+        while (xrPollEvent(instance_, &ed) == XR_SUCCESS) {
+            if (ed.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+                auto* ssc = reinterpret_cast<XrEventDataSessionStateChanged*>(&ed);
+                sessionState_ = ssc->state;
+                LOGI("session state -> %d", (int)sessionState_);
+                if (sessionState_ == XR_SESSION_STATE_READY) {
+                    XrSessionBeginInfo sbi{XR_TYPE_SESSION_BEGIN_INFO};
+                    sbi.primaryViewConfigurationType =
+                        XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                    XR_CHECK(xrBeginSession(session_, &sbi), break);
+                }
+            }
+            ed = {XR_TYPE_EVENT_DATA_BUFFER};
+        }
+        if (sessionState_ < XR_SESSION_STATE_READY) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
         XrFrameState fs{XR_TYPE_FRAME_STATE};
-        XR_CHECK(xrWaitFrame(session_, nullptr, &fs), break);
+        if (xrWaitFrame(session_, nullptr, &fs) != XR_SUCCESS) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+        static uint64_t waitReturns = 0;
+        if ((waitReturns++ & 0x3F) == 0) {  // log every 64 returns
+            LOGI("xrWaitFrame ok #%llu state=%d shouldRender=%d",
+                 (unsigned long long)waitReturns, (int)sessionState_, (int)fs.shouldRender);
+        }
         XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
         xrBeginFrame(session_, &bi);
 
         XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
         ei.displayTime = fs.predictedDisplayTime;
+        ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;  // required, 0 is invalid
 
-        if (fs.shouldRender && renderIntoSwapchains(fs.predictedDisplayTime, decoder)) {
+        bool rendered = false;
+        if (fs.shouldRender) rendered = renderIntoSwapchains(fs.predictedDisplayTime, decoder);
+        if (rendered) {
             XrCompositionLayerProjectionView pv[2] = {
                 {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
                 {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
@@ -313,7 +349,16 @@ void XrRenderer::run(std::atomic<bool>& running, VideoDecoder& decoder) {
             ei.layerCount = 0;
             ei.layers = nullptr;
         }
-        xrEndFrame(session_, &ei);
+        XrResult endR = xrEndFrame(session_, &ei);
+        if (endR != XR_SUCCESS) {
+            static uint64_t endFails = 0;
+            if ((endFails++ & 0x3F) == 0) {
+                char m[XR_MAX_RESULT_STRING_SIZE] = {0};
+                xrResultToString(instance_, endR, m);
+                LOGI("xrEndFrame FAILED: %s (rendered=%d layers=%u)", m, (int)rendered,
+                     ei.layerCount);
+            }
+        }
         framesRendered_++;
     }
     LOGI("render loop exit after %llu frames", (unsigned long long)framesRendered_);
