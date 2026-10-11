@@ -13,6 +13,9 @@ set_target_properties(driver_vrstream PROPERTIES
 )
 add_custom_command(TARGET driver_vrstream POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:driver_vrstream>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/driver-root/vrstream/driver_vrstream.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/driver.vrdrivermanifest"
-        "$<TARGET_FILE_DIR:driver_vrstream>/driver.vrdrivermanifest"
+        "${CMAKE_CURRENT_SOURCE_DIR}/driver-root/vrstream/driver.vrdrivermanifest"
 )

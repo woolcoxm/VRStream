@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(vrstream_tools LANGUAGES CXX)
+add_executable(chaperone_commit chaperone_commit.cpp)
+target_include_directories(chaperone_commit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../driver/vendor)
+target_compile_definitions(chaperone_commit PRIVATE NOMINMAX)

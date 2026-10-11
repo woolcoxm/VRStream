@@ -150,24 +150,54 @@ EVRInitError VrstreamHmd::Activate(uint32_t objectIndex) {
     objectId_ = objectIndex;
     active_ = true;
 
-    VRProperties()->SetStringProperty(objectIndex, Prop_ModelNumber_String, "vrstream_hmd_1");
-    VRProperties()->SetStringProperty(objectIndex, Prop_SerialNumber_String, "vrstream-1");
-    VRProperties()->SetStringProperty(objectIndex, Prop_ManufacturerName_String, "VRStream");
-    VRProperties()->SetStringProperty(objectIndex, Prop_TrackingFirmwareVersion_String, "1.0");
-    VRProperties()->SetStringProperty(objectIndex, Prop_HardwareRevision_String, "1.0");
-    VRProperties()->SetBoolProperty(objectIndex, Prop_NeverTracked_Bool, false);
-    VRProperties()->SetUint64Property(objectIndex, Prop_CurrentUniverseId_Uint64, 2);
-    VRProperties()->SetBoolProperty(objectIndex, Prop_DeviceProvidesBatteryStatus_Bool, false);
-    VRProperties()->SetStringProperty(objectIndex, Prop_RenderModelName_String, "generic_hmd");
-    VRProperties()->SetBoolProperty(objectIndex, Prop_WillDriftInYaw_Bool, false);
-    VRProperties()->SetStringProperty(objectIndex, Prop_RegisteredDeviceType_String,
-                                    "vrstream/hmd");
-    VRProperties()->SetBoolProperty(objectIndex, Prop_DeviceIsWireless_Bool, true);
-    VRProperties()->SetInt32Property(objectIndex, Prop_DeviceClass_Int32,
-                                   TrackedDeviceClass_HMD);
-    VRProperties()->SetBoolProperty(objectIndex, Prop_DisplayAllowNightMode_Bool, true);
-    VRProperties()->SetStringProperty(objectIndex, Prop_TrackingSystemName_String,
-                                    "vrstream");
+    vr::PropertyContainerHandle_t props =
+        VRProperties()->TrackedDeviceToPropertyContainer(objectIndex);
+
+    VRProperties()->SetStringProperty(props, Prop_ModelNumber_String, "vrstream_hmd_1");
+    VRProperties()->SetStringProperty(props, Prop_SerialNumber_String, "vrstream-1");
+    VRProperties()->SetStringProperty(props, Prop_ManufacturerName_String, "VRStream");
+    VRProperties()->SetStringProperty(props, Prop_TrackingFirmwareVersion_String, "1.0");
+    VRProperties()->SetStringProperty(props, Prop_HardwareRevision_String, "1.0");
+    VRProperties()->SetBoolProperty(props, Prop_NeverTracked_Bool, false);
+    VRProperties()->SetUint64Property(props, Prop_CurrentUniverseId_Uint64, 2);
+    VRProperties()->SetBoolProperty(props, Prop_DeviceProvidesBatteryStatus_Bool, false);
+    VRProperties()->SetStringProperty(props, Prop_RenderModelName_String, "generic_hmd");
+    VRProperties()->SetBoolProperty(props, Prop_WillDriftInYaw_Bool, false);
+    VRProperties()->SetStringProperty(props, Prop_RegisteredDeviceType_String,
+                                      "vrstream/hmd");
+    VRProperties()->SetBoolProperty(props, Prop_DeviceIsWireless_Bool, true);
+    VRProperties()->SetInt32Property(props, Prop_DeviceClass_Int32,
+                                     TrackedDeviceClass_HMD);
+    VRProperties()->SetBoolProperty(props, Prop_DisplayAllowNightMode_Bool, true);
+    VRProperties()->SetStringProperty(props, Prop_TrackingSystemName_String, "vrstream");
+
+    // Compositor-required display properties (missing DisplayFrequency is a
+    // hard VRInitError_Compositor_DisplayFrequencyFailure).
+    VRProperties()->SetFloatProperty(props, Prop_DisplayFrequency_Float, 90.0f);
+    VRProperties()->SetFloatProperty(props, Prop_UserIpdMeters_Float, 0.063f);
+    VRProperties()->SetFloatProperty(props, Prop_UserHeadToEyeDepthMeters_Float, 0.0f);
+    VRProperties()->SetInt32Property(props, Prop_EdidVendorID_Int32, 0x0e11);
+    VRProperties()->SetInt32Property(props, Prop_EdidProductID_Int32, 0x1988);
+    VRProperties()->SetFloatProperty(props, Prop_SecondsFromVsyncToPhotons_Float,
+                                     1.0f / 90.0f);
+
+    // DirectMode display model: eye-to-head transforms + raw tangent FOVs.
+    // Without these the compositor fails to build distortion
+    // (VRInitError_Compositor_CreateDistortionSurfaces).
+    vr::HmdMatrix34_t eyeToHead[2] = {};
+    for (int eye = 0; eye < 2; eye++) {
+        eyeToHead[eye].m[0][0] = 1.0f;
+        eyeToHead[eye].m[1][1] = 1.0f;
+        eyeToHead[eye].m[2][2] = 1.0f;
+        eyeToHead[eye].m[3][0] = eye == 0 ? -0.0315f : +0.0315f;  // half IPD
+    }
+    vr::HmdRect2_t tangents{};
+    tangents.vTopLeft.v[0] = -1.02f;   // tan(left)
+    tangents.vTopLeft.v[1] = -1.02f;   // tan(down)
+    tangents.vBottomRight.v[0] = 1.02f;  // tan(right)
+    tangents.vBottomRight.v[1] = 1.02f;  // tan(up)
+    VRServerDriverHost()->SetDisplayEyeToHead(objectIndex, eyeToHead[0], eyeToHead[1]);
+    VRServerDriverHost()->SetDisplayProjectionRaw(objectIndex, tangents, tangents);
 
     eyeW_ = 1536;
     eyeH_ = 1600;
@@ -448,10 +478,7 @@ class SProvider : public IServerTrackedDeviceProvider {
         return ok ? VRInitError_None : VRInitError_Driver_Failed;
     }
     void Cleanup() override {}
-    const char* const* GetInterfaceVersions() override {
-        static const char* versions[] = {IVRServerDriverHost_Version, nullptr};
-        return versions;
-    }
+    const char* const* GetInterfaceVersions() override { return vr::k_InterfaceVersions; }
     void RunFrame() override {}
     bool ShouldBlockStandbyMode() override { return false; }
     void EnterStandby() override {}

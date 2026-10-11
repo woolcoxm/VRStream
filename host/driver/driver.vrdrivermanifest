@@ -1,5 +1,6 @@
 {
     "name": "vrstream",
-    "requires": [],
-    "dlls": ["driver_vrstream.dll"]
+    "alwaysActivate": true,
+    "redirectsDisplay": true,
+    "hmd_presence": ["*.*"]
 }

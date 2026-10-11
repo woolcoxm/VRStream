@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\Mark\Desktop\Projects\VRStream\host\tools\tt\CMakeFiles\7d046786e6e6efeb2e08b5daf4cf4b0b\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{E0EC7CAE-D86A-3B1C-B6EC-198B7E976CEC}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

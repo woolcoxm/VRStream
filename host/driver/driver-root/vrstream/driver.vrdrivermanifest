@@ -1,0 +1,6 @@
+{
+    "name": "vrstream",
+    "alwaysActivate": true,
+    "redirectsDisplay": true,
+    "hmd_presence": ["*.*"]
+}
